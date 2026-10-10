@@ -38,6 +38,15 @@ public:
             return selectedApp;
         }
 
+        // Touch on screen in Launcher:
+        if (input.screenTouched) {
+            if (input.touchX > 90 && input.touchX < 290 && input.touchY > 25 && input.touchY < 135) {
+                return selectedApp; // Tap card to launch
+            } else {
+                selectedApp = (selectedApp + 1) % TOTAL_APPS; // Tap to cycle
+            }
+        }
+
         return -1;
     }
 

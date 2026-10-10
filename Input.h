@@ -1,9 +1,23 @@
 #pragma once
 #include <Arduino.h>
+#include <Wire.h>
+#include <CST816_TouchLib.h>
 #include "Display_Config.h"
+
+#define PIN_TOUCH_SDA 18
+#define PIN_TOUCH_SCL 17
+#define PIN_TOUCH_INT 16
+#define PIN_TOUCH_RST 21
 
 class InputManager {
 public:
+    MDO::CST816Touch_SWMode touchController;
+    bool touchAvailable = false;
+    bool homeButtonPressed = false;
+    bool screenTouched = false;
+    int touchX = -1;
+    int touchY = -1;
+
     bool downLeft = false;
     bool downRight = false;
     bool justPressedLeft = false;
@@ -20,11 +34,20 @@ public:
     void init() {
         pinMode(PIN_BTN1, INPUT_PULLUP);
         pinMode(PIN_BTN2, INPUT_PULLUP);
+
+        // Initialize I2C for CST816 touch controller
+        Wire.begin(PIN_TOUCH_SDA, PIN_TOUCH_SCL);
+        Wire.setClock(400000);
+        touchAvailable = touchController.begin(Wire, PIN_TOUCH_INT, PIN_TOUCH_RST);
+        if (touchAvailable) {
+            touchController.setSwapXY(true);
+        }
     }
 
     void update(bool enableExitHold = true) {
         uint32_t now = millis();
 
+        // 1. Read Physical Buttons
         bool rawLeft = (digitalRead(PIN_BTN1) == LOW);
         bool rawRight = (digitalRead(PIN_BTN2) == LOW);
 
@@ -41,8 +64,47 @@ public:
 
         exitTriggered = false;
         exitProgress = 0.0f;
+        homeButtonPressed = false;
+        screenTouched = false;
 
+        // 2. Read Capacitive Touch & Home Circle Button
+        if (touchAvailable) {
+            touchController.control();
+            MDO::TouchScreenEventCache* pTouchCache = MDO::TouchScreenEventCache::getInstance();
+
+            if (pTouchCache->hadGesture()) {
+                MDO::TouchScreenController::gesture_t gesture = MDO::TouchScreenController::gesture_t::GESTURE_NONE;
+                int gx = 0, gy = 0;
+                pTouchCache->getLastGesture(gesture, gx, gy);
+                if (gesture == MDO::TouchScreenController::gesture_t::GESTURE_TOUCH_BUTTON) {
+                    homeButtonPressed = true;
+                }
+            }
+
+            if (pTouchCache->hadTouch()) {
+                int tx = 0, ty = 0;
+                pTouchCache->getLastTouchPosition(tx, ty);
+                touchX = tx;
+                touchY = ty;
+
+                // T-Display-S3 Touch: circle button on bezel sits beyond 315px horizontally
+                if (tx >= 315) {
+                    homeButtonPressed = true;
+                } else {
+                    screenTouched = true;
+                }
+            }
+        }
+
+        // 3. Exit Handling
         if (enableExitHold) {
+            // Home button touched -> Instant exit to main menu!
+            if (homeButtonPressed) {
+                exitTriggered = true;
+                return;
+            }
+
+            // Long-press backup (holding physical buttons for 1.5s)
             uint32_t holdTime = 0;
             if (downLeft) holdTime = max(holdTime, now - pressStartLeft);
             if (downRight) holdTime = max(holdTime, now - pressStartRight);
@@ -55,7 +117,7 @@ public:
                 if (holdTime >= EXIT_HOLD_MS) {
                     exitTriggered = true;
                     exitProgress = 0.0f;
-                    pressStartLeft = now + 10000;  // Prevent re-triggering until released
+                    pressStartLeft = now + 10000;
                     pressStartRight = now + 10000;
                 }
             }
@@ -64,7 +126,6 @@ public:
 
     void drawExitOverlay() {
         if (exitProgress > 0.05f) {
-            // Draw a compact, elegant exit progress bar in the top-right corner
             int barW = 86;
             int barH = 14;
             int x = SCREEN_W - barW - 6;
@@ -75,7 +136,7 @@ public:
 
             int fillW = (int)((barW - 4) * exitProgress);
             if (fillW > barW - 4) fillW = barW - 4;
-            canvas.fillRoundRect(x + 2, y + 2, fillW, barH - 4, 2, 0xF800); // Red progress
+            canvas.fillRoundRect(x + 2, y + 2, fillW, barH - 4, 2, 0xF800);
 
             canvas.setTextDatum(textdatum_t::middle_center);
             canvas.setTextColor(TFT_WHITE);

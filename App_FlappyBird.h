@@ -113,7 +113,7 @@ public:
     }
 
     void update() {
-        bool flapPressed = (input.justPressedLeft || input.justPressedRight);
+        bool flapPressed = (input.justPressedLeft || input.justPressedRight || input.screenTouched);
 
         switch (state) {
             case READY: {
