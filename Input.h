@@ -41,6 +41,7 @@ public:
         touchAvailable = touchController.begin(Wire, PIN_TOUCH_INT, PIN_TOUCH_RST);
         if (touchAvailable) {
             touchController.setSwapXY(true);
+            touchController.setInvertY(true, 170); // Invert Y to match LCD coordinate space (y=0 at top)
         }
     }
 

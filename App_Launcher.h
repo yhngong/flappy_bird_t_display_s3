@@ -35,18 +35,27 @@ public:
     void init() {}
 
     int getAppAtCoordinates(int tx, int ty) {
-        // Grid bounds: 3 columns x 2 rows
+        // Exclude status bar (0..18) and bottom home indicator (162..170)
+        if (ty < 18 || ty > 162) return -1;
+        if (tx < 0 || tx >= 320) return -1;
+
+        // 3 wide touch columns:
+        // Col 0: 0..106 px (Flappy / Shooter)
+        // Col 1: 107..213 px (Sensors / Snake)
+        // Col 2: 214..319 px (Clock / System)
         int col = -1;
-        if (tx >= 12 && tx <= 98) col = 0;
-        else if (tx >= 118 && tx <= 204) col = 1;
-        else if (tx >= 224 && tx <= 310) col = 2;
+        if (tx < 107) col = 0;
+        else if (tx < 214) col = 1;
+        else col = 2;
 
-        int row = -1;
-        if (ty >= 20 && ty <= 82) row = 0;
-        else if (ty >= 84 && ty <= 150) row = 1;
+        // 2 tall touch rows:
+        // Row 0: 18..89 px (Top 3 apps)
+        // Row 1: 90..162 px (Bottom 3 apps)
+        int row = (ty < 90) ? 0 : 1;
 
-        if (col != -1 && row != -1) {
-            return (row * 3) + col;
+        int appIdx = (row * 3) + col;
+        if (appIdx >= 0 && appIdx < TOTAL_APPS) {
+            return appIdx;
         }
         return -1;
     }
@@ -89,6 +98,13 @@ public:
         canvas.setTextDatum(textdatum_t::middle_left);
         canvas.setTextColor(TFT_WHITE);
         canvas.drawString(timeStr, 12, 9, &fonts::Font0);
+
+        // Live Touch Coordinates in center
+        if (input.touchX >= 0) {
+            canvas.setTextDatum(textdatum_t::middle_center);
+            canvas.setTextColor(0x07FF);
+            canvas.drawString("T:(" + String(input.touchX) + "," + String(input.touchY) + ")", SCREEN_W / 2, 9, &fonts::Font0);
+        }
 
         // Battery Pill on Right
         int rawMv = analogReadMilliVolts(PIN_BATTERY);
@@ -273,6 +289,12 @@ public:
 
         // iOS Home Bar Indicator at bottom center
         canvas.fillRoundRect(120, 162, 80, 4, 2, 0xAD55);
+
+        // Touch feedback ripple
+        if (input.touchX >= 0 && input.touchY >= 0) {
+            canvas.drawCircle(input.touchX, input.touchY, 8, TFT_CYAN);
+            canvas.drawCircle(input.touchX, input.touchY, 9, TFT_WHITE);
+        }
     }
 };
 
