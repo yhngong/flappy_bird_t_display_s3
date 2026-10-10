@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Arduino build cache
+build/
+*.bin
+*.elf
+*.hex
+
+# Editor directories
+.vscode/
+.idea/
