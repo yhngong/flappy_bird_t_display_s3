@@ -1,9 +1,9 @@
 #include "Display_Config.h"
 #include "Input.h"
+#include "App_Clock.h"
 #include "App_Launcher.h"
 #include "App_FlappyBird.h"
 #include "App_Sensors.h"
-#include "App_Clock.h"
 #include "App_SpaceShooter.h"
 #include "App_Snake.h"
 #include "App_Dashboard.h"
@@ -12,10 +12,10 @@
 LGFX_TDisplayS3 display;
 LGFX_Sprite canvas(&display);
 InputManager input;
+AppClock appClock;
 AppLauncher launcher;
 AppFlappyBird appFlappy;
 AppSensors appSensors;
-AppClock appClock;
 AppSpaceShooter appSpace;
 AppSnake appSnake;
 AppDashboard appDashboard;
@@ -36,6 +36,7 @@ void setup() {
     Serial.begin(115200);
 
     input.init();
+    appClock.init(); // Initialize Pacific Timezone and clock baseline
 
     // Initialize display & backlight
     display.init();

@@ -8,26 +8,26 @@
 
 class AppClock {
 public:
-    int tzIndex = 1; // 0: UTC-8 (PST), 1: UTC-7 (PDT), 2: UTC-5 (EST), 3: UTC-4 (EDT), 4: UTC+0 (GMT), 5: UTC+1 (CET), 6: UTC+8 (CST), 7: UTC+9 (JST)
-    const int TZ_OFFSETS[8] = { -8, -7, -5, -4, 0, 1, 8, 9 };
-    const char* TZ_NAMES[8] = { "PST (UTC-8)", "PDT (UTC-7)", "EST (UTC-5)", "EDT (UTC-4)", "GMT (UTC+0)", "CET (UTC+1)", "CST (UTC+8)", "JST (UTC+9)" };
+    // Default: San Francisco Bay Area (Pacific Time with auto PST/PDT DST)
+    const char* TZ_PACIFIC = "PST8PDT,M3.2.0,M11.1.0";
+    const char* TZ_NAME = "SF Bay Area (Pacific)";
 
     bool ntpSynced = false;
     bool syncing = false;
     uint32_t syncStartTime = 0;
     String syncStatusMsg = "Press BTN2 to Sync NTP";
 
-    // Fallback software clock initialized to compile time
+    // Hardware/Software clock initialized to build time in San Francisco
     time_t baseTime = 0;
     uint32_t baseMillis = 0;
 
     Preferences prefs;
 
     void init() {
-        prefs.begin("clock", false);
-        tzIndex = prefs.getInt("tz", 1); // Default PDT (UTC-7)
+        // Set ESP32 system timezone to San Francisco Bay Area
+        setenv("TZ", TZ_PACIFIC, 1);
+        tzset();
 
-        // Initialize base time from compile timestamp (__DATE__ and __TIME__)
         if (baseTime == 0) {
             parseCompileTime();
         }
@@ -46,6 +46,7 @@ public:
         t.tm_hour = hour;
         t.tm_min = min;
         t.tm_sec = sec;
+        t.tm_isdst = -1; // Auto-determine DST for Pacific Time
         for (int m = 0; m < 12; m++) {
             if (strncmp(s_month, months[m], 3) == 0) {
                 t.tm_mon = m;
@@ -62,7 +63,6 @@ public:
             time(&now);
             return now;
         } else {
-            // Software clock progressing with millis()
             return baseTime + ((millis() - baseMillis) / 1000);
         }
     }
@@ -72,7 +72,6 @@ public:
         syncStartTime = millis();
         syncStatusMsg = "Connecting to Wi-Fi...";
 
-        // Look for saved Wi-Fi in preferences or connect
         Preferences netPrefs;
         netPrefs.begin("wifi_cfg", true);
         String ssid = netPrefs.getString("ssid", "");
@@ -82,39 +81,29 @@ public:
         if (ssid.length() > 0) {
             WiFi.begin(ssid.c_str(), pass.c_str());
         } else {
-            // If no saved Wi-Fi, try connecting to open networks or show hint
             syncStatusMsg = "Scanning Wi-Fi...";
-            WiFi.begin(); // Attempt reconnect
+            WiFi.begin();
         }
     }
 
     void update() {
-        // Button 1: Cycle Timezone
-        if (input.justPressedLeft) {
-            tzIndex = (tzIndex + 1) % 8;
-            prefs.putInt("tz", tzIndex);
-            if (ntpSynced) {
-                configTime(TZ_OFFSETS[tzIndex] * 3600, 0, "pool.ntp.org", "time.nist.gov");
-            }
-        }
-
-        // Button 2: Trigger NTP Sync
+        // Button 2: Trigger Wi-Fi NTP Sync
         if (input.justPressedRight && !syncing) {
             startNtpSync();
         }
 
-        // Handle background Wi-Fi NTP sync process
+        // Handle background Wi-Fi NTP sync
         if (syncing) {
             uint32_t elapsed = millis() - syncStartTime;
             if (WiFi.status() == WL_CONNECTED) {
-                syncStatusMsg = "Querying NTP servers...";
-                configTime(TZ_OFFSETS[tzIndex] * 3600, 0, "pool.ntp.org", "time.nist.gov");
+                syncStatusMsg = "Querying NTP atomic clock...";
+                configTzTime(TZ_PACIFIC, "pool.ntp.org", "time.nist.gov");
 
                 struct tm timeinfo;
                 if (getLocalTime(&timeinfo, 500)) {
                     ntpSynced = true;
                     syncing = false;
-                    syncStatusMsg = "NTP Synced Successfully!";
+                    syncStatusMsg = "NTP Synced (Pacific Time)!";
                 } else if (elapsed > 10000) {
                     syncing = false;
                     syncStatusMsg = "NTP Timeout. Using RTC.";
@@ -140,16 +129,15 @@ public:
         canvas.setTextDatum(textdatum_t::top_right);
         if (ntpSynced) {
             canvas.setTextColor(0x07E0);
-            canvas.drawString("[NTP SYNCED]", SCREEN_W - 8, 4, &fonts::Font2);
+            canvas.drawString("[NTP PACIFIC]", SCREEN_W - 8, 4, &fonts::Font2);
         } else {
             canvas.setTextColor(0xFD20);
-            canvas.drawString("[INTERNAL RTC]", SCREEN_W - 8, 4, &fonts::Font2);
+            canvas.drawString("[RTC PACIFIC]", SCREEN_W - 8, 4, &fonts::Font2);
         }
 
         // Get time components
         time_t tVal = getCurrentTime();
-        struct tm* tmInfo = gmtime(&tVal); // use gmtime with manual tz offset
-        int tzHour = (tmInfo->tm_hour + TZ_OFFSETS[tzIndex] + 24) % 24;
+        struct tm* tmInfo = localtime(&tVal);
 
         // Big Digital Clock (HH:MM:SS)
         int cx = 112;
@@ -158,13 +146,13 @@ public:
         canvas.drawRoundRect(cx, cy, 198, 62, 6, 0x04DF);
 
         char timeBuf[16];
-        snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", tzHour, tmInfo->tm_min, tmInfo->tm_sec);
+        snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", tmInfo->tm_hour, tmInfo->tm_min, tmInfo->tm_sec);
 
         canvas.setTextDatum(textdatum_t::middle_center);
         canvas.setTextColor(0x07FF);
         canvas.drawString(timeBuf, cx + 99, cy + 30, &fonts::Font6);
 
-        // Date & Timezone string
+        // Date string
         const char* days[] = { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" };
         const char* mons[] = { "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC" };
         char dateBuf[48];
@@ -177,10 +165,10 @@ public:
         // Timezone badge
         canvas.setTextDatum(textdatum_t::top_right);
         canvas.setTextColor(0xFEE0);
-        canvas.drawString(TZ_NAMES[tzIndex], cx + 190, cy + 70, &fonts::Font2);
+        canvas.drawString("San Francisco (PT)", cx + 192, cy + 70, &fonts::Font2);
 
-        // Analog Clock Face on the left
-        drawAnalogClock(54, 82, 38, tzHour, tmInfo->tm_min, tmInfo->tm_sec);
+        // Analog Clock Face on left
+        drawAnalogClock(54, 82, 38, tmInfo->tm_hour, tmInfo->tm_min, tmInfo->tm_sec);
 
         // Sync Status banner
         canvas.setTextDatum(textdatum_t::top_left);
@@ -191,7 +179,7 @@ public:
         canvas.fillRect(0, SCREEN_H - 18, SCREEN_W, 18, 0x10A2);
         canvas.setTextDatum(textdatum_t::bottom_left);
         canvas.setTextColor(0xFD20);
-        canvas.drawString("BTN1: CHANGE TIMEZONE", 10, SCREEN_H - 3, &fonts::Font0);
+        canvas.drawString("BAY AREA / PACIFIC TIME", 10, SCREEN_H - 3, &fonts::Font0);
 
         canvas.setTextDatum(textdatum_t::bottom_right);
         canvas.setTextColor(0x07E0);
