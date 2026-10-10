@@ -139,41 +139,42 @@ public:
         time_t tVal = getCurrentTime();
         struct tm* tmInfo = localtime(&tVal);
 
-        // Big Digital Clock (HH:MM:SS)
-        int cx = 112;
-        int cy = 34;
-        canvas.fillRoundRect(cx, cy, 198, 62, 6, 0x0861);
-        canvas.drawRoundRect(cx, cy, 198, 62, 6, 0x04DF);
+        // Digital Clock Card (Cleanly proportioned 4-line layout)
+        int cx = 110;
+        int cy = 26;
+        int cw = 202;
+        int ch = 122;
+        canvas.fillRoundRect(cx, cy, cw, ch, 6, 0x0861);
+        canvas.drawRoundRect(cx, cy, cw, ch, 6, 0x04DF);
 
+        // 1. Digital Time (HH:MM:SS)
         char timeBuf[16];
         snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", tmInfo->tm_hour, tmInfo->tm_min, tmInfo->tm_sec);
-
         canvas.setTextDatum(textdatum_t::middle_center);
         canvas.setTextColor(0x07FF);
-        canvas.drawString(timeBuf, cx + 99, cy + 30, &fonts::Font6);
+        canvas.drawString(timeBuf, cx + cw / 2, cy + 24, &fonts::Font6);
 
-        // Date string
+        // 2. Date Line (e.g. "SAT, OCT 10, 2026")
         const char* days[] = { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" };
         const char* mons[] = { "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC" };
         char dateBuf[48];
         snprintf(dateBuf, sizeof(dateBuf), "%s, %s %02d, %04d", days[tmInfo->tm_wday], mons[tmInfo->tm_mon], tmInfo->tm_mday, tmInfo->tm_year + 1900);
-
-        canvas.setTextDatum(textdatum_t::top_left);
+        canvas.setTextDatum(textdatum_t::middle_center);
         canvas.setTextColor(TFT_WHITE);
-        canvas.drawString(dateBuf, cx + 8, cy + 70, &fonts::Font2);
+        canvas.drawString(dateBuf, cx + cw / 2, cy + 54, &fonts::Font2);
 
-        // Timezone badge
-        canvas.setTextDatum(textdatum_t::top_right);
+        // 3. Timezone Badge Line (Separated on its own line)
+        canvas.setTextDatum(textdatum_t::middle_center);
         canvas.setTextColor(0xFEE0);
-        canvas.drawString("San Francisco (PT)", cx + 192, cy + 70, &fonts::Font2);
+        canvas.drawString("San Francisco (Pacific Time)", cx + cw / 2, cy + 76, &fonts::Font2);
+
+        // 4. Sync Status banner
+        canvas.setTextDatum(textdatum_t::middle_center);
+        canvas.setTextColor(ntpSynced ? 0x07E0 : TFT_LIGHTGRAY);
+        canvas.drawString(syncStatusMsg, cx + cw / 2, cy + 102, &fonts::Font0);
 
         // Analog Clock Face on left
-        drawAnalogClock(54, 82, 38, tmInfo->tm_hour, tmInfo->tm_min, tmInfo->tm_sec);
-
-        // Sync Status banner
-        canvas.setTextDatum(textdatum_t::top_left);
-        canvas.setTextColor(TFT_LIGHTGRAY);
-        canvas.drawString(syncStatusMsg, cx + 8, cy + 90, &fonts::Font0);
+        drawAnalogClock(54, 87, 38, tmInfo->tm_hour, tmInfo->tm_min, tmInfo->tm_sec);
 
         // Bottom Navigation Bar
         canvas.fillRect(0, SCREEN_H - 18, SCREEN_W, 18, 0x10A2);
