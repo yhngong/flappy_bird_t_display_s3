@@ -1,645 +1,123 @@
-#define LGFX_USE_V1
-#include <LovyanGFX.hpp>
-#include <Preferences.h>
+#include "Display_Config.h"
+#include "Input.h"
+#include "App_Launcher.h"
+#include "App_FlappyBird.h"
+#include "App_Sensors.h"
+#include "App_Clock.h"
+#include "App_SpaceShooter.h"
+#include "App_Snake.h"
+#include "App_Dashboard.h"
 
-// ============================================================================
-// LilyGO T-Display-S3 Hardware Display Definition (ST7789 8-bit Parallel)
-// ============================================================================
-class LGFX_TDisplayS3 : public lgfx::LGFX_Device {
-    lgfx::Panel_ST7789  _panel_instance;
-    lgfx::Bus_Parallel8 _bus_instance;
-    lgfx::Light_PWM     _light_instance;
-
-public:
-    LGFX_TDisplayS3() {
-        {
-            auto cfg = _bus_instance.config();
-            cfg.port       = 0;
-            cfg.freq_write = 20000000;
-            cfg.pin_wr     = 8;
-            cfg.pin_rd     = 9;
-            cfg.pin_rs     = 7;
-            cfg.pin_d0     = 39;
-            cfg.pin_d1     = 40;
-            cfg.pin_d2     = 41;
-            cfg.pin_d3     = 42;
-            cfg.pin_d4     = 45;
-            cfg.pin_d5     = 46;
-            cfg.pin_d6     = 47;
-            cfg.pin_d7     = 48;
-            _bus_instance.config(cfg);
-            _panel_instance.setBus(&_bus_instance);
-        }
-        {
-            auto cfg = _panel_instance.config();
-            cfg.pin_cs           = 6;
-            cfg.pin_rst          = 5;
-            cfg.pin_busy         = -1;
-            cfg.memory_width     = 240;
-            cfg.memory_height    = 320;
-            cfg.panel_width      = 170;
-            cfg.panel_height     = 320;
-            cfg.offset_x         = 35;
-            cfg.offset_y         = 0;
-            cfg.offset_rotation  = 0;
-            cfg.dummy_read_pixel = 8;
-            cfg.dummy_read_bits  = 1;
-            cfg.readable         = false;
-            cfg.invert           = true;
-            cfg.rgb_order        = false;
-            cfg.dlen_16bit       = false;
-            cfg.bus_shared       = false;
-            _panel_instance.config(cfg);
-        }
-        {
-            auto cfg = _light_instance.config();
-            cfg.pin_bl      = 38;
-            cfg.invert      = false;
-            cfg.freq        = 44100;
-            cfg.pwm_channel = 7;
-            _light_instance.config(cfg);
-            _panel_instance.setLight(&_light_instance);
-        }
-        setPanel(&_panel_instance);
-    }
-
-    bool init() {
-        pinMode(15, OUTPUT);
-        digitalWrite(15, HIGH); // Power on LCD
-        return lgfx::LGFX_Device::init();
-    }
-};
-
+// Global hardware and app instances
 LGFX_TDisplayS3 display;
 LGFX_Sprite canvas(&display);
-Preferences prefs;
+InputManager input;
+AppLauncher launcher;
+AppFlappyBird appFlappy;
+AppSensors appSensors;
+AppClock appClock;
+AppSpaceShooter appSpace;
+AppSnake appSnake;
+AppDashboard appDashboard;
 
-// Button Pins on LilyGO T-Display-S3
-#define PIN_BTN1 0   // Boot button (Left side)
-#define PIN_BTN2 14  // Key button  (Right side)
-
-// Screen dimensions
-const int SCREEN_W = 320;
-const int SCREEN_H = 170;
-const int GROUND_Y = 146;
-const int GROUND_H = 24;
-
-// Color Palette (RGB565)
-#define COLOR_SKY       0x5D9F   // Soft retro blue
-#define COLOR_CLOUD     0xFFFF   // White
-#define COLOR_CLOUD_SH  0xD69A   // Cloud shadow
-#define COLOR_HILL_FAR  0x6475   // Distant mountain
-#define COLOR_HILL_NEAR 0x4BF0   // Near mountain
-#define COLOR_PIPE_BODY 0x3E24   // Green
-#define COLOR_PIPE_LIP  0x4645   // Lighter Green
-#define COLOR_PIPE_DARK 0x1A60   // Dark Green Shadow
-#define COLOR_PIPE_HI   0x76E8   // Green Highlight
-#define COLOR_GROUND_GR 0x5D43   // Top grass line
-#define COLOR_GROUND_EARTH 0xCE52 // Sand/earth
-#define COLOR_GROUND_STRIPE 0xBD0D
-
-// Game States
-enum GameState {
-    STATE_READY,
-    STATE_PLAY,
-    STATE_HIT,
-    STATE_GAMEOVER
+enum CurrentApp {
+    APP_MENU = -1,
+    APP_FLAPPY = 0,
+    APP_SENSORS = 1,
+    APP_CLOCK = 2,
+    APP_SPACE = 3,
+    APP_SNAKE = 4,
+    APP_DASHBOARD = 5
 };
 
-GameState gameState = STATE_READY;
-
-// Physics parameters
-const float GRAVITY = 0.22f;
-const float FLAP_STRENGTH = -3.7f;
-const float MAX_FALL_SPEED = 4.8f;
-const float SCROLL_SPEED = 1.8f;
-
-// Bird
-float birdX = 65.0f;
-float birdY = 70.0f;
-float birdVY = 0.0f;
-float birdAngle = 0.0f;
-const float BIRD_RADIUS = 7.5f;
-int wingPhase = 0;
-int wingTimer = 0;
-
-// Pipes
-const int PIPE_COUNT = 3;
-const int PIPE_WIDTH = 34;
-const int INITIAL_PIPE_GAP = 76; // Starts large and forgiving
-const int MIN_PIPE_GAP = 44;     // Gradually shrinks down to this minimum
-const int PIPE_SPACING = 175; // Increased spacing for more breathing room between obstacles
-
-struct Pipe {
-    float x;
-    int gapY;
-    int gapSize;
-    bool scored;
-};
-
-Pipe pipes[PIPE_COUNT];
-
-// Parallax backgrounds
-struct Cloud {
-    float x;
-    int y;
-    int radius;
-    float speed;
-};
-Cloud clouds[4];
-
-float groundScroll = 0.0f;
-float hillScroll = 0.0f;
-
-// Scores
-int score = 0;
-int highScore = 0;
-bool isNewHigh = false;
-uint32_t stateTimer = 0;
-int flashFrames = 0;
-
-// Button state
-bool btnPrev = false;
-
-// Function prototypes
-void resetGame();
-int getCurrentPipeGap();
-void spawnPipe(int idx, float startX);
-void updatePhysics();
-void drawGame();
-void drawBird(int bx, int by, float angle, int wing);
-void drawPipe(int x, int gapY, int gapSize);
-void drawBackground();
-void drawGround();
-void drawScoreBadge();
+CurrentApp activeApp = APP_MENU;
 
 void setup() {
     Serial.begin(115200);
 
-    pinMode(PIN_BTN1, INPUT_PULLUP);
-    pinMode(PIN_BTN2, INPUT_PULLUP);
+    input.init();
 
     // Initialize display & backlight
     display.init();
     display.setRotation(1); // Landscape 320x170
     display.setBrightness(220);
 
-    // Create double-buffer canvas in RAM (fits in 108KB)
+    // Create double-buffer canvas in RAM
     canvas.setColorDepth(16);
     canvas.createSprite(SCREEN_W, SCREEN_H);
 
-    // Load High Score from NVS
-    prefs.begin("flappy", false);
-    highScore = prefs.getInt("highscore", 0);
-
-    // Initialize clouds
-    clouds[0] = { 40.0f,  18, 14, 0.35f };
-    clouds[1] = { 130.0f, 32, 11, 0.25f };
-    clouds[2] = { 220.0f, 22, 16, 0.40f };
-    clouds[3] = { 310.0f, 38, 10, 0.20f };
-
-    resetGame();
-}
-
-void resetGame() {
-    birdX = 65.0f;
-    birdY = 65.0f;
-    birdVY = 0.0f;
-    birdAngle = 0.0f;
-    score = 0;
-    isNewHigh = false;
-
-    // Distribute 3 pipes off-screen to start
-    for (int i = 0; i < PIPE_COUNT; i++) {
-        spawnPipe(i, SCREEN_W + 40 + (i * PIPE_SPACING));
-    }
-}
-
-int getCurrentPipeGap() {
-    // Gap starts wide at INITIAL_PIPE_GAP (76) and shrinks by 2 pixels
-    // for every point scored, down to MIN_PIPE_GAP (44).
-    int gap = INITIAL_PIPE_GAP - (score * 2);
-    if (gap < MIN_PIPE_GAP) {
-        gap = MIN_PIPE_GAP;
-    }
-    return gap;
-}
-
-void spawnPipe(int idx, float startX) {
-    pipes[idx].x = startX;
-    int gap = getCurrentPipeGap();
-    pipes[idx].gapSize = gap;
-    int halfGap = gap / 2;
-    int minY = halfGap + 12;
-    int maxY = GROUND_Y - halfGap - 12;
-    if (maxY < minY) {
-        pipes[idx].gapY = GROUND_Y / 2;
-    } else {
-        pipes[idx].gapY = random(minY, maxY + 1);
-    }
-    pipes[idx].scored = false;
+    launcher.init();
 }
 
 void loop() {
     uint32_t frameStart = millis();
 
-    // Read buttons (active LOW)
-    bool b1 = (digitalRead(PIN_BTN1) == LOW);
-    bool b2 = (digitalRead(PIN_BTN2) == LOW);
-    bool btnDown = (b1 || b2);
-    bool btnJustPressed = (btnDown && !btnPrev);
-    btnPrev = btnDown;
+    // Enable 1.5s long-press exit detection only when inside an app
+    bool inApp = (activeApp != APP_MENU);
+    input.update(inApp);
 
-    // Handle states
-    switch (gameState) {
-        case STATE_READY: {
-            // Bird gentle bobbing animation
-            birdY = 68.0f + sin(millis() * 0.006f) * 7.0f;
-            birdAngle = 0.0f;
-
-            wingTimer++;
-            if (wingTimer >= 6) {
-                wingTimer = 0;
-                wingPhase = (wingPhase + 1) % 3;
-            }
-
-            // Scroll ground & clouds gently
-            groundScroll -= 1.0f;
-            if (groundScroll <= -16.0f) groundScroll += 16.0f;
-
-            for (int i = 0; i < 4; i++) {
-                clouds[i].x -= clouds[i].speed;
-                if (clouds[i].x < -40) clouds[i].x = SCREEN_W + 30;
-            }
-
-            if (btnJustPressed) {
-                birdVY = FLAP_STRENGTH;
-                gameState = STATE_PLAY;
-            }
-            break;
-        }
-
-        case STATE_PLAY: {
-            if (btnJustPressed) {
-                birdVY = FLAP_STRENGTH;
-                wingPhase = 2; // Wing up
-            }
-
-            updatePhysics();
-            break;
-        }
-
-        case STATE_HIT: {
-            // Flash screen and let bird drop to ground
-            birdVY += GRAVITY * 1.5f;
-            birdY += birdVY;
-            birdAngle += 15.0f;
-            if (birdAngle > 90.0f) birdAngle = 90.0f;
-
-            if (birdY >= GROUND_Y - BIRD_RADIUS) {
-                birdY = GROUND_Y - BIRD_RADIUS;
-                gameState = STATE_GAMEOVER;
-                stateTimer = millis();
-
-                // Save High Score
-                if (score > highScore) {
-                    highScore = score;
-                    isNewHigh = true;
-                    prefs.putInt("highscore", highScore);
-                }
-            }
-            break;
-        }
-
-        case STATE_GAMEOVER: {
-            // Wait 500ms before accepting restart to prevent accidental tap
-            if (millis() - stateTimer > 500 && btnJustPressed) {
-                resetGame();
-                gameState = STATE_READY;
-            }
-            break;
-        }
+    // Long-press exit trigger: return to main menu
+    if (inApp && input.exitTriggered) {
+        activeApp = APP_MENU;
+        launcher.init();
     }
 
-    // Render frame
-    drawGame();
+    if (activeApp == APP_MENU) {
+        int launchSelection = launcher.update();
+        if (launchSelection >= 0) {
+            activeApp = (CurrentApp)launchSelection;
+            switch (activeApp) {
+                case APP_FLAPPY:    appFlappy.init(); break;
+                case APP_SENSORS:   appSensors.init(); break;
+                case APP_CLOCK:     appClock.init(); break;
+                case APP_SPACE:     appSpace.init(); break;
+                case APP_SNAKE:     appSnake.init(); break;
+                case APP_DASHBOARD: appDashboard.init(); break;
+                default: break;
+            }
+        }
+        launcher.draw();
+    } else {
+        // Run active app
+        switch (activeApp) {
+            case APP_FLAPPY:
+                appFlappy.update();
+                appFlappy.draw();
+                break;
+            case APP_SENSORS:
+                appSensors.update();
+                appSensors.draw();
+                break;
+            case APP_CLOCK:
+                appClock.update();
+                appClock.draw();
+                break;
+            case APP_SPACE:
+                appSpace.update();
+                appSpace.draw();
+                break;
+            case APP_SNAKE:
+                appSnake.update();
+                appSnake.draw();
+                break;
+            case APP_DASHBOARD:
+                appDashboard.update();
+                appDashboard.draw();
+                break;
+            default:
+                break;
+        }
+
+        // Draw exit hold feedback progress bar if holding button
+        input.drawExitOverlay();
+    }
+
+    // Push rendered frame to ST7789 display
     canvas.pushSprite(0, 0);
 
-    // Target ~50 FPS (20ms per frame)
+    // Maintain stable ~50 FPS
     uint32_t elapsed = millis() - frameStart;
     if (elapsed < 20) {
         delay(20 - elapsed);
-    }
-}
-
-void updatePhysics() {
-    // Bird physics
-    birdVY += GRAVITY;
-    if (birdVY > MAX_FALL_SPEED) birdVY = MAX_FALL_SPEED;
-    birdY += birdVY;
-
-    // Angle tilting
-    if (birdVY < 0) {
-        birdAngle = -22.0f;
-    } else {
-        birdAngle += 3.5f;
-        if (birdAngle > 75.0f) birdAngle = 75.0f;
-    }
-
-    // Wing flap animation
-    wingTimer++;
-    if (wingTimer >= 5) {
-        wingTimer = 0;
-        wingPhase = (wingPhase + 1) % 3;
-    }
-
-    // Scroll ground and clouds
-    groundScroll -= SCROLL_SPEED;
-    if (groundScroll <= -16.0f) groundScroll += 16.0f;
-
-    hillScroll -= (SCROLL_SPEED * 0.3f);
-    if (hillScroll <= -80.0f) hillScroll += 80.0f;
-
-    for (int i = 0; i < 4; i++) {
-        clouds[i].x -= clouds[i].speed;
-        if (clouds[i].x < -40) clouds[i].x = SCREEN_W + 30;
-    }
-
-    // Move pipes
-    for (int i = 0; i < PIPE_COUNT; i++) {
-        pipes[i].x -= SCROLL_SPEED;
-
-        // Check score passing
-        if (!pipes[i].scored && pipes[i].x + PIPE_WIDTH < birdX) {
-            pipes[i].scored = true;
-            score++;
-        }
-
-        // Recycle pipe when it goes off screen to the left
-        if (pipes[i].x < -PIPE_WIDTH - 10) {
-            float rightmostX = 0;
-            for (int j = 0; j < PIPE_COUNT; j++) {
-                if (pipes[j].x > rightmostX) rightmostX = pipes[j].x;
-            }
-            spawnPipe(i, rightmostX + PIPE_SPACING);
-        }
-
-        // Collision detection with pipe
-        float px = pipes[i].x;
-        float gapTop = pipes[i].gapY - (pipes[i].gapSize / 2);
-        float gapBottom = pipes[i].gapY + (pipes[i].gapSize / 2);
-
-        // Check horizontal overlap
-        if (birdX + BIRD_RADIUS > px && birdX - BIRD_RADIUS < px + PIPE_WIDTH) {
-            // Check vertical hit with top or bottom pipe
-            if (birdY - BIRD_RADIUS < gapTop || birdY + BIRD_RADIUS > gapBottom) {
-                gameState = STATE_HIT;
-                flashFrames = 3;
-                birdVY = -2.0f;
-                return;
-            }
-        }
-    }
-
-    // Collision with ground or ceiling
-    if (birdY >= GROUND_Y - BIRD_RADIUS) {
-        birdY = GROUND_Y - BIRD_RADIUS;
-        gameState = STATE_HIT;
-        flashFrames = 3;
-    }
-    if (birdY < BIRD_RADIUS) {
-        birdY = BIRD_RADIUS;
-        birdVY = 0;
-    }
-}
-
-// ============================================================================
-// Graphics & Drawing Routines
-// ============================================================================
-
-void drawGame() {
-    if (flashFrames > 0) {
-        flashFrames--;
-        canvas.fillScreen(TFT_WHITE);
-        return;
-    }
-
-    drawBackground();
-
-    // Draw pipes
-    for (int i = 0; i < PIPE_COUNT; i++) {
-        if (pipes[i].x > -PIPE_WIDTH - 20 && pipes[i].x < SCREEN_W + 20) {
-            drawPipe((int)pipes[i].x, pipes[i].gapY, pipes[i].gapSize);
-        }
-    }
-
-    drawGround();
-    drawBird((int)birdX, (int)birdY, birdAngle, wingPhase);
-
-    // UI overlays based on state
-    if (gameState == STATE_PLAY) {
-        // Draw crisp HUD score at top center
-        canvas.setTextDatum(textdatum_t::middle_center);
-        canvas.setTextColor(TFT_BLACK);
-        canvas.drawString(String(score), SCREEN_W / 2 + 2, 24 + 2, &fonts::Font4);
-        canvas.setTextColor(TFT_WHITE);
-        canvas.drawString(String(score), SCREEN_W / 2, 24, &fonts::Font4);
-    } 
-    else if (gameState == STATE_READY) {
-        // Title Banner
-        canvas.setTextDatum(textdatum_t::middle_center);
-        canvas.setTextColor(0x1940);
-        canvas.drawString("FLAPPY BIRD", SCREEN_W / 2 + 2, 32 + 2, &fonts::Font4);
-        canvas.setTextColor(0xFEE0);
-        canvas.drawString("FLAPPY BIRD", SCREEN_W / 2, 32, &fonts::Font4);
-
-        // Blinking prompt
-        if ((millis() / 450) % 2 == 0) {
-            canvas.setTextDatum(textdatum_t::middle_center);
-            canvas.setTextColor(TFT_WHITE);
-            canvas.drawString("PRESS ANY BUTTON TO JUMP", SCREEN_W / 2, 115, &fonts::Font2);
-        }
-
-        // High score indicator
-        canvas.setTextDatum(textdatum_t::top_left);
-        canvas.setTextColor(TFT_WHITE, COLOR_SKY);
-        canvas.drawString("BEST: " + String(highScore), 8, 8, &fonts::Font2);
-    } 
-    else if (gameState == STATE_GAMEOVER) {
-        drawScoreBadge();
-    }
-}
-
-void drawBackground() {
-    // Sky gradient
-    canvas.fillRect(0, 0, SCREEN_W, 90, COLOR_SKY);
-    canvas.fillRect(0, 90, SCREEN_W, GROUND_Y - 90, 0x759F);
-
-    // Distant mountain hills
-    for (int i = -1; i < 5; i++) {
-        int hx = (int)(i * 80 + hillScroll);
-        canvas.fillCircle(hx + 40, GROUND_Y + 12, 45, COLOR_HILL_FAR);
-    }
-    for (int i = -1; i < 6; i++) {
-        int hx = (int)(i * 65 + (hillScroll * 1.4f));
-        canvas.fillCircle(hx + 30, GROUND_Y + 8, 30, COLOR_HILL_NEAR);
-    }
-
-    // Fluffy clouds
-    for (int i = 0; i < 4; i++) {
-        int cx = (int)clouds[i].x;
-        int cy = clouds[i].y;
-        int r = clouds[i].radius;
-
-        canvas.fillCircle(cx, cy, r, COLOR_CLOUD);
-        canvas.fillCircle(cx - r * 0.7f, cy + 2, r * 0.75f, COLOR_CLOUD);
-        canvas.fillCircle(cx + r * 0.7f, cy + 2, r * 0.75f, COLOR_CLOUD);
-        canvas.fillRect(cx - r * 0.8f, cy + 2, (int)(r * 1.6f), (int)(r * 0.8f), COLOR_CLOUD);
-    }
-}
-
-void drawGround() {
-    // Top bright grass bar
-    canvas.fillRect(0, GROUND_Y, SCREEN_W, 4, COLOR_GROUND_GR);
-    canvas.drawFastHLine(0, GROUND_Y + 4, SCREEN_W, 0x3BC0); // Shadow line
-
-    // Earth
-    canvas.fillRect(0, GROUND_Y + 5, SCREEN_W, GROUND_H - 5, COLOR_GROUND_EARTH);
-
-    // Animated diagonal grass dashes
-    for (int x = (int)groundScroll - 16; x < SCREEN_W + 16; x += 16) {
-        canvas.drawLine(x, GROUND_Y + 5, x + 6, GROUND_Y + GROUND_H - 1, COLOR_GROUND_STRIPE);
-        canvas.drawLine(x + 1, GROUND_Y + 5, x + 7, GROUND_Y + GROUND_H - 1, COLOR_GROUND_STRIPE);
-    }
-}
-
-void drawPipe(int x, int gapY, int gapSize) {
-    int gapTop = gapY - (gapSize / 2);
-    int gapBottom = gapY + (gapSize / 2);
-    int lipH = 9;
-    int lipOverhang = 3;
-
-    // === TOP PIPE ===
-    if (gapTop > 0) {
-        int shaftH = gapTop - lipH;
-        if (shaftH > 0) {
-            // Shaft body
-            canvas.fillRect(x, 0, PIPE_WIDTH, shaftH, COLOR_PIPE_BODY);
-            // Highlight bar on left
-            canvas.fillRect(x + 3, 0, 4, shaftH, COLOR_PIPE_HI);
-            // Shadow bar on right
-            canvas.fillRect(x + PIPE_WIDTH - 6, 0, 5, shaftH, COLOR_PIPE_DARK);
-            // Outer borders
-            canvas.drawFastVLine(x, 0, shaftH, TFT_BLACK);
-            canvas.drawFastVLine(x + PIPE_WIDTH - 1, 0, shaftH, TFT_BLACK);
-        }
-
-        // Top Pipe Lip (bottom end of top pipe)
-        int lipX = x - lipOverhang;
-        int lipW = PIPE_WIDTH + (lipOverhang * 2);
-        int lipY = gapTop - lipH;
-
-        canvas.fillRect(lipX, lipY, lipW, lipH, COLOR_PIPE_LIP);
-        canvas.fillRect(lipX + 3, lipY, 5, lipH, COLOR_PIPE_HI);
-        canvas.fillRect(lipX + lipW - 7, lipY, 6, lipH, COLOR_PIPE_DARK);
-        canvas.drawRect(lipX, lipY, lipW, lipH, TFT_BLACK);
-    }
-
-    // === BOTTOM PIPE ===
-    int botShaftY = gapBottom + lipH;
-    int botShaftH = GROUND_Y - botShaftY;
-
-    if (botShaftH > 0) {
-        canvas.fillRect(x, botShaftY, PIPE_WIDTH, botShaftH, COLOR_PIPE_BODY);
-        canvas.fillRect(x + 3, botShaftY, 4, botShaftH, COLOR_PIPE_HI);
-        canvas.fillRect(x + PIPE_WIDTH - 6, botShaftY, 5, botShaftH, COLOR_PIPE_DARK);
-        canvas.drawFastVLine(x, botShaftY, botShaftH, TFT_BLACK);
-        canvas.drawFastVLine(x + PIPE_WIDTH - 1, botShaftY, botShaftH, TFT_BLACK);
-    }
-
-    // Bottom Pipe Lip (top end of bottom pipe)
-    int lipX = x - lipOverhang;
-    int lipW = PIPE_WIDTH + (lipOverhang * 2);
-    int lipY = gapBottom;
-
-    canvas.fillRect(lipX, lipY, lipW, lipH, COLOR_PIPE_LIP);
-    canvas.fillRect(lipX + 3, lipY, 5, lipH, COLOR_PIPE_HI);
-    canvas.fillRect(lipX + lipW - 7, lipY, 6, lipH, COLOR_PIPE_DARK);
-    canvas.drawRect(lipX, lipY, lipW, lipH, TFT_BLACK);
-}
-
-void drawBird(int bx, int by, float angle, int wing) {
-    // Bird Body (Golden Yellow round body)
-    canvas.fillCircle(bx, by, 9, 0xFDE0);
-    canvas.drawCircle(bx, by, 9, TFT_BLACK);
-
-    // Belly (cream/light yellow)
-    canvas.fillCircle(bx - 3, by + 3, 5, 0xFFF5);
-
-    // Eye (White with black pupil)
-    canvas.fillCircle(bx + 4, by - 3, 4, TFT_WHITE);
-    canvas.drawCircle(bx + 4, by - 3, 4, TFT_BLACK);
-    canvas.fillCircle(bx + 5, by - 3, 2, TFT_BLACK); // Pupil
-    canvas.fillCircle(bx + 6, by - 4, 1, TFT_WHITE); // Sparkle
-
-    // Beak (Orange with mouth line)
-    canvas.fillTriangle(bx + 7, by - 1, bx + 15, by + 2, bx + 7, by + 5, 0xFC40);
-    canvas.drawTriangle(bx + 7, by - 1, bx + 15, by + 2, bx + 7, by + 5, TFT_BLACK);
-    canvas.drawFastHLine(bx + 8, by + 2, 6, TFT_BLACK);
-
-    // Wing flapping frames
-    if (wing == 0) {
-        // Wing middle
-        canvas.fillRoundRect(bx - 8, by - 1, 9, 6, 2, TFT_WHITE);
-        canvas.drawRoundRect(bx - 8, by - 1, 9, 6, 2, TFT_BLACK);
-    } else if (wing == 1) {
-        // Wing down
-        canvas.fillRoundRect(bx - 7, by + 2, 8, 6, 2, TFT_WHITE);
-        canvas.drawRoundRect(bx - 7, by + 2, 8, 6, 2, TFT_BLACK);
-    } else {
-        // Wing up
-        canvas.fillRoundRect(bx - 8, by - 5, 9, 6, 2, TFT_WHITE);
-        canvas.drawRoundRect(bx - 8, by - 5, 9, 6, 2, TFT_BLACK);
-    }
-}
-
-void drawScoreBadge() {
-    // Retro Scoreboard Card
-    int bw = 200;
-    int bh = 95;
-    int bx = (SCREEN_W - bw) / 2;
-    int by = 26;
-
-    // Card shadow & body
-    canvas.fillRoundRect(bx + 3, by + 3, bw, bh, 8, 0x18C3);
-    canvas.fillRoundRect(bx, by, bw, bh, 8, 0xDF57); // Warm retro parchment
-    canvas.drawRoundRect(bx, by, bw, bh, 8, TFT_BLACK);
-    canvas.drawRoundRect(bx + 2, by + 2, bw - 4, bh - 4, 6, 0xFEF5);
-
-    // Header: GAME OVER
-    canvas.setTextDatum(textdatum_t::top_center);
-    canvas.setTextColor(0xD000);
-    canvas.drawString("GAME OVER", SCREEN_W / 2, by + 8, &fonts::Font4);
-
-    // Current Score
-    canvas.setTextDatum(textdatum_t::top_left);
-    canvas.setTextColor(TFT_BLACK);
-    canvas.drawString("SCORE: " + String(score), bx + 22, by + 40, &fonts::Font2);
-
-    // High Score
-    canvas.drawString("BEST:  " + String(highScore), bx + 22, by + 58, &fonts::Font2);
-
-    // New Best Star/Badge!
-    if (isNewHigh) {
-        canvas.setTextDatum(textdatum_t::top_right);
-        canvas.setTextColor(0xD0A0);
-        canvas.drawString("NEW!", bx + bw - 18, by + 42, &fonts::Font2);
-    }
-
-    // Tap to Restart prompt
-    if ((millis() / 400) % 2 == 0) {
-        canvas.setTextDatum(textdatum_t::bottom_center);
-        canvas.setTextColor(TFT_WHITE);
-        canvas.drawString("PRESS BUTTON TO RETRY", SCREEN_W / 2, SCREEN_H - 4, &fonts::Font2);
     }
 }
